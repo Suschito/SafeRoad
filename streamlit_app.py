@@ -28,10 +28,10 @@ AGE_GROUPS = ["All Ages", "18–24", "25–29", "30–59", "Over 60"]
 
 AGE_RISK = {
     "All Ages": 1.0,
-    "18–24": 1.6,
-    "25–29": 1.3,
-    "30–59": 1.0,
-    "Over 60": 1.2
+    "18–24":    1.6,
+    "25–29":    1.3,
+    "30–59":    1.0,
+    "Over 60":  1.2
 }
 
 ITALIAN_PROVINCES = sorted([
@@ -53,7 +53,7 @@ ITALIAN_PROVINCES = sorted([
 ])
 
 # =============================================================================
-# API
+# API — REAL DATA
 # =============================================================================
 @st.cache_data(ttl=3600)
 def fetch_mortality_data():
@@ -82,7 +82,7 @@ def fetch_youth_mortality():
     return None, False
 
 # =============================================================================
-# DEMO DATA GENERATION (province x month x age)
+# DEMO DATA — YEAR 2024 FIXED
 # =============================================================================
 @st.cache_data
 def generate_data():
@@ -103,10 +103,11 @@ def generate_data():
                 dead_drv  = max(0, int(np.random.poisson(base * 0.020 * m_mult * a_mult)))
                 dead_pass = max(0, int(np.random.poisson(base * 0.008 * m_mult * a_mult)))
                 rows.append({
-                    "province":           province,
-                    "month":              month_name,
-                    "month_num":          month_num,
-                    "age_group":          age,
+                    "province":            province,
+                    "year":                2024,
+                    "month":               month_name,
+                    "month_num":           month_num,
+                    "age_group":           age,
                     "injured_pedestrians": inj_ped,
                     "injured_drivers":     inj_drv,
                     "injured_passengers":  inj_pass,
@@ -116,14 +117,22 @@ def generate_data():
                 })
 
     df = pd.DataFrame(rows)
-    df["total_injured"] = df["injured_pedestrians"] + df["injured_drivers"] + df["injured_passengers"]
-    df["total_dead"]    = df["dead_pedestrians"] + df["dead_drivers"] + df["dead_passengers"]
-    df["risk_score"]    = np.minimum(100,
+    df["total_injured"] = (
+        df["injured_pedestrians"] +
+        df["injured_drivers"] +
+        df["injured_passengers"]
+    )
+    df["total_dead"] = (
+        df["dead_pedestrians"] +
+        df["dead_drivers"] +
+        df["dead_passengers"]
+    )
+    df["risk_score"] = np.minimum(100,
         df["total_injured"] * 0.35 + df["total_dead"] * 1.8
     ).round(1)
 
     def risk_label(s):
-        if s < 30:  return "🟢 Low"
+        if s < 30:   return "🟢 Low"
         elif s < 60: return "🟡 Medium"
         else:        return "🔴 High"
 
@@ -131,11 +140,11 @@ def generate_data():
     return df
 
 # =============================================================================
-# LOAD
+# LOAD DATA
 # =============================================================================
-df_all = generate_data()
-df_mort, ok_mort  = fetch_mortality_data()
-df_youth, ok_youth = fetch_youth_mortality()
+df_all                = generate_data()
+df_mort,  ok_mort     = fetch_mortality_data()
+df_youth, ok_youth    = fetch_youth_mortality()
 
 # =============================================================================
 # HEADER
@@ -143,7 +152,7 @@ df_youth, ok_youth = fetch_youth_mortality()
 st.title("🚗 SafeRoad")
 col_h1, col_h2 = st.columns([3, 1])
 with col_h1:
-    st.markdown("**Insurance Risk Assessment Dashboard** | All Italian Provinces")
+    st.markdown("**Insurance Risk Assessment Dashboard** | All Italian Provinces | 📅 Year: 2024")
     st.caption("Group 7 — Gianluca Pisetta, Erika Minelli, Antonio Susca")
 with col_h2:
     st.caption(f"🕒 Last update: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
@@ -160,7 +169,6 @@ st.markdown("---")
 st.sidebar.header("🔍 Filters")
 st.sidebar.markdown("---")
 
-# Province
 selected_provinces = st.sidebar.multiselect(
     "📍 Province(s)",
     options=ITALIAN_PROVINCES,
@@ -169,18 +177,16 @@ selected_provinces = st.sidebar.multiselect(
 if not selected_provinces:
     selected_provinces = ["Roma"]
 
-# Month
 selected_month = st.sidebar.selectbox(
     "📅 Month",
     options=list(MONTHS.keys()),
-    index=0  # default = "All Months"
+    index=0
 )
 
-# Age Group
 selected_age = st.sidebar.selectbox(
     "👤 Age Group",
     options=AGE_GROUPS,
-    index=0  # default = "All Ages"
+    index=0
 )
 
 st.sidebar.markdown("---")
@@ -189,6 +195,7 @@ st.sidebar.caption("• [ISTAT](https://www.istat.it)")
 st.sidebar.caption("• [Open Data Trentino](https://dati.trentino.it)")
 st.sidebar.caption("• [Statistica Trentino](https://statweb.provincia.tn.it)")
 st.sidebar.markdown("---")
+st.sidebar.caption("📅 Reference year: 2024")
 st.sidebar.caption("All road types included.")
 st.sidebar.caption("No road-type filtering applied.")
 
@@ -197,22 +204,19 @@ st.sidebar.caption("No road-type filtering applied.")
 # =============================================================================
 df_f = df_all[df_all["province"].isin(selected_provinces)].copy()
 
-# Month filter
 if selected_month != "All Months":
     df_f = df_f[df_f["month"] == selected_month]
 
-# Age filter
 if selected_age != "All Ages":
     df_f = df_f[df_f["age_group"] == selected_age]
 
-# Label for display
 period_label = selected_month if selected_month != "All Months" else "All Months"
 age_label    = selected_age   if selected_age   != "All Ages"   else "All Ages"
 
 # =============================================================================
 # RF1 — 6 KPI CARDS
 # =============================================================================
-st.markdown(f"### 📊 Risk Indicators — {period_label} | {age_label}")
+st.markdown(f"### 📊 Risk Indicators — {period_label} | {age_label} | 2024")
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("🚶 Inj. Pedestrians", f"{df_f['injured_pedestrians'].sum():,}")
@@ -225,7 +229,7 @@ c6.metric("💀 Dead Passengers",  f"{df_f['dead_passengers'].sum():,}")
 st.markdown("---")
 
 # =============================================================================
-# RF2 — RISK SCORE + FACTORS
+# RF2 — RISK SCORE + CONTRIBUTING FACTORS
 # =============================================================================
 st.markdown("### 🎯 Risk Score Estimation")
 
@@ -242,8 +246,11 @@ with col_rs1:
 
     st.markdown(f"""
     <div style='
-        background:#1e1e1e;border:2px solid {color};
-        border-radius:12px;padding:28px;text-align:center;
+        background:#1e1e1e;
+        border:2px solid {color};
+        border-radius:12px;
+        padding:28px;
+        text-align:center;
     '>
         <div style='font-size:52px;font-weight:bold;color:{color}'>{avg_risk:.0f}</div>
         <div style='color:#aaa;margin-bottom:6px'>out of 100</div>
@@ -257,15 +264,13 @@ with col_rs1:
 
 with col_rs2:
     st.markdown("**Main contributing factors:**")
-
     month_w = MONTH_RISK.get(MONTHS.get(selected_month, 0), 1.0)
     age_w   = AGE_RISK.get(selected_age, 1.0)
-
     raw_factors = {
-        "📍 Historical accident density": 35,
-        f"📅 Monthly trend ({period_label})": int(month_w * 20),
-        f"👤 Age group risk ({age_label})": int(age_w * 15),
-        "🛣️ All road types (aggregated)": 10,
+        "📍 Historical accident density":       35,
+        f"📅 Monthly trend ({period_label})":   int(month_w * 20),
+        f"👤 Age group risk ({age_label})":     int(age_w * 15),
+        "🛣️ All road types (aggregated)":       10,
     }
     total = sum(raw_factors.values())
     for label, w in raw_factors.items():
@@ -276,7 +281,7 @@ with col_rs2:
 st.markdown("---")
 
 # =============================================================================
-# RF1 — PROVINCE COMPARISON TABLE + CHARTS
+# RF1 — PROVINCE COMPARISON
 # =============================================================================
 st.markdown("### 🏙️ Province Comparison")
 
@@ -297,7 +302,6 @@ col_c1, col_c2 = st.columns(2)
 with col_c1:
     st.markdown("**Risk Score by Province**")
     st.bar_chart(compare_df.set_index("province")["risk_score"])
-
 with col_c2:
     st.markdown("**Total Injured vs Dead by Province**")
     st.bar_chart(compare_df.set_index("province")[["total_injured", "total_dead"]])
@@ -306,9 +310,9 @@ st.markdown("**📋 Full Comparison Table**")
 st.dataframe(
     compare_df[[
         "province",
-        "injured_pedestrians", "injured_drivers", "injured_passengers",
-        "dead_pedestrians",    "dead_drivers",    "dead_passengers",
-        "risk_score", "risk_level"
+        "injured_pedestrians", "injured_drivers",  "injured_passengers",
+        "dead_pedestrians",    "dead_drivers",      "dead_passengers",
+        "risk_score",          "risk_level"
     ]].rename(columns={
         "province":             "Province",
         "injured_pedestrians":  "Inj. Pedestrians",
@@ -326,16 +330,16 @@ st.dataframe(
 st.markdown("---")
 
 # =============================================================================
-# MONTHLY TREND (visible only if "All Months" selected)
+# MONTHLY TREND — only when "All Months" selected
 # =============================================================================
 if selected_month == "All Months":
-    st.markdown("### 📅 Monthly Trend — Selected Provinces & Age Group")
+    st.markdown("### 📅 Monthly Trend — 2024")
     monthly = df_f.groupby("month_num").agg({
         "total_injured": "sum",
         "total_dead":    "sum",
         "risk_score":    "mean"
     }).reindex(range(1, 13))
-    monthly.index = list(MONTHS.keys())[1:]  # Jan–Dec labels
+    monthly.index = list(MONTHS.keys())[1:]
     monthly.index.name = "Month"
 
     col_m1, col_m2 = st.columns(2)
@@ -349,11 +353,11 @@ if selected_month == "All Months":
     st.markdown("---")
 
 # =============================================================================
-# AGE GROUP COMPARISON (visible only if "All Ages" selected)
+# AGE GROUP COMPARISON — only when "All Ages" selected
 # =============================================================================
 if selected_age == "All Ages":
-    st.markdown("### 👥 Risk by Age Group — Selected Provinces & Month")
-    age_q = df_all[df_all["province"].isin(selected_provinces)]
+    st.markdown("### 👥 Risk by Age Group — 2024")
+    age_q = df_all[df_all["province"].isin(selected_provinces)].copy()
     if selected_month != "All Months":
         age_q = age_q[age_q["month"] == selected_month]
 
@@ -384,8 +388,11 @@ if ok_mort and df_mort is not None:
         st.line_chart(df_mort[["Anno", "Trentino", "Italia"]].set_index("Anno"))
     with col_rd2:
         st.markdown("**Regional comparison — latest year**")
-        last = df_mort.iloc[-1]
-        regioni = {k: float(str(v).replace(',', '.')) for k, v in last.items() if k != 'Anno'}
+        last  = df_mort.iloc[-1]
+        regioni = {
+            k: float(str(v).replace(',', '.'))
+            for k, v in last.items() if k != 'Anno'
+        }
         st.bar_chart(pd.Series(regioni))
 
     if ok_youth and df_youth is not None:
@@ -398,7 +405,12 @@ if ok_mort and df_mort is not None:
 # DOWNLOAD
 # =============================================================================
 csv = df_f.to_csv(index=False).encode("utf-8")
-st.download_button("📥 Download Filtered Data (CSV)", csv, "saferoad_export.csv", "text/csv")
+st.download_button(
+    "📥 Download Filtered Data (CSV)",
+    csv,
+    "saferoad_2024_export.csv",
+    "text/csv"
+)
 
 # =============================================================================
 # FOOTER
@@ -406,5 +418,5 @@ st.download_button("📥 Download Filtered Data (CSV)", csv, "saferoad_export.cs
 st.markdown("---")
 st.caption(
     "**SafeRoad** | Group 7 — Gianluca Pisetta, Erika Minelli, Antonio Susca | "
-    "Powered by ISTAT & Open Data Trentino | All road types included"
+    "Powered by ISTAT & Open Data Trentino | All road types included | 📅 Data: 2024"
 )
