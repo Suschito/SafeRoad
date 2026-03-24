@@ -3,22 +3,37 @@ import pandas as pd
 import numpy as np
 import requests
 from datetime import datetime
+from io import StringIO
 
 st.set_page_config(layout="wide", page_title="SafeRoad 🚗")
 
 # =============================================================================
-# FUNZIONI API
+# FUNZIONI API — URL REALI VERIFICATI
 # =============================================================================
 @st.cache_data(ttl=3600)
-def fetch_open_data_trentino():
+def fetch_mortalita_trentino():
+    """Mortalità per incidenti stradali — Trentino (2004–2022)"""
     try:
-        url = "https://dati.trentino.it/api/3/action/datastore_search"
-        params = {"resource_id": "9296f70a-fc3f-44ba-9f86-87d90c1352cf", "limit": 1000}
-        r = requests.get(url, params=params, timeout=15)
+        url = "https://statweb.provincia.tn.it/indicatoristrutturali/exp.aspx?fmt=csv&idind=824&t=i"
+        r = requests.get(url, timeout=15)
         if r.status_code == 200:
-            records = r.json().get("result", {}).get("records", [])
-            if records:
-                return pd.DataFrame(records), True
+            df = pd.read_csv(StringIO(r.text), sep=';')
+            df['Anno'] = df['Anno'].astype(int)
+            return df, True
+    except:
+        pass
+    return None, False
+
+@st.cache_data(ttl=3600)
+def fetch_morti_15_34():
+    """Mortalità per incidenti stradali 15–34 anni — Trentino"""
+    try:
+        url = "https://statweb.provincia.tn.it/indicatoristrutturali/exp.aspx?fmt=csv&idind=829&t=i"
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            df = pd.read_csv(StringIO(r.text), sep=';')
+            df['Anno'] = df['Anno'].astype(int)
+            return df, True
     except:
         pass
     return None, False
@@ -51,13 +66,14 @@ def genera_dati_demo():
 # =============================================================================
 # CARICAMENTO DATI
 # =============================================================================
-with st.spinner("Caricamento dati..."):
-    df_trentino, ok = fetch_open_data_trentino()
-    if ok and df_trentino is not None and len(df_trentino) > 10:
-        df = df_trentino
-        st.sidebar.success("✅ Dati: Open Data Trentino")
+with st.spinner("Caricamento dati reali..."):
+    df_mort, ok_mort = fetch_mortalita_trentino()
+    df_gio, ok_gio = fetch_morti_15_34()
+    df_demo = genera_dati_demo()
+
+    if ok_mort:
+        st.sidebar.success("✅ Dati reali: Provincia di Trento")
     else:
-        df = genera_dati_demo()
         st.sidebar.warning("⚠️ Dati demo (API non disponibile)")
 
 # =============================================================================
@@ -78,24 +94,24 @@ st.markdown("---")
 st.sidebar.header("🔍 Filtri")
 st.sidebar.markdown("---")
 
-comuni_list = sorted(df['comune'].unique().tolist())
+anni_list = sorted(df_demo['anno'].unique().tolist(), reverse=True)
+anno_sel = st.sidebar.multiselect("📅 Anno", options=anni_list, default=anni_list[:3])
+
+comuni_list = sorted(df_demo['comune'].unique().tolist())
 comune_sel = st.sidebar.selectbox("📍 Comune", ['Tutti'] + comuni_list)
 
 gravita_sel = st.sidebar.selectbox("⚠️ Gravità", ['Tutti', 'Con feriti', 'Mortali'])
-
-anni_list = sorted(df['anno'].unique().tolist(), reverse=True)
-anno_sel = st.sidebar.multiselect("📅 Anno", options=anni_list, default=anni_list[:3])
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📌 Fonte dati**")
 st.sidebar.caption("• [ISTAT](https://www.istat.it)")
 st.sidebar.caption("• [Open Data Trentino](https://dati.trentino.it)")
+st.sidebar.caption("• [Statistica Trentino](https://statweb.provincia.tn.it)")
 
 # =============================================================================
-# FILTRAGGIO
+# FILTRAGGIO DATI DEMO (comunali)
 # =============================================================================
-df_f = df.copy()
-
+df_f = df_demo.copy()
 if anno_sel:
     df_f = df_f[df_f['anno'].isin(anno_sel)]
 if comune_sel != 'Tutti':
@@ -117,8 +133,34 @@ col4.metric("⚠️ Risk Score Medio", f"{df_f['risk_score'].mean():.0f}/100")
 st.markdown("---")
 
 # =============================================================================
-# GRAFICI NATIVI STREAMLIT (zero dipendenze extra)
+# SEZIONE DATI REALI — MORTALITÀ TRENTINO
 # =============================================================================
+if ok_mort and df_mort is not None:
+    st.markdown("### 📊 Mortalità per Incidenti Stradali — Dati Reali")
+    col_r1, col_r2 = st.columns(2)
+
+    with col_r1:
+        st.markdown("**Tasso mortalità Trentino vs Italia (per 100k abitanti)**")
+        chart_data = df_mort[['Anno', 'Trentino', 'Italia']].set_index('Anno')
+        st.line_chart(chart_data)
+
+    with col_r2:
+        st.markdown("**Confronto Regioni (ultimo anno disponibile)**")
+        last = df_mort.iloc[-1]
+        regioni = {k: float(v) for k, v in last.items() if k != 'Anno'}
+        st.bar_chart(pd.Series(regioni))
+
+    if ok_gio and df_gio is not None:
+        st.markdown("**👶 Mortalità 15–34 anni — Trentino**")
+        chart_gio = df_gio[['Anno', 'Trentino']].set_index('Anno')
+        st.line_chart(chart_gio)
+
+    st.markdown("---")
+
+# =============================================================================
+# GRAFICI COMUNALI (demo)
+# =============================================================================
+st.markdown("### 🏙️ Analisi Comunale")
 col_g1, col_g2 = st.columns(2)
 
 with col_g1:
@@ -151,7 +193,7 @@ stagione = (
 st.bar_chart(stagione)
 
 # =============================================================================
-# RISK SCORE BREAKDOWN
+# FATTORI DI RISCHIO
 # =============================================================================
 st.markdown("---")
 st.markdown("### 🎯 Fattori di Rischio")
@@ -165,19 +207,17 @@ col_r4.metric("👥 Densità pop.",     "12%")
 # TABELLA
 # =============================================================================
 st.markdown("---")
-st.markdown("### 📋 Dati Dettaglio")
+st.markdown("### 📋 Dati Dettaglio Comuni")
 st.dataframe(
-    df_f[['comune', 'anno', 'mese', 'incidenti', 'feriti', 'morti', 'risk_score']]
-    .sort_values(['anno', 'comune'])
+    df_f[['comune','anno','mese','incidenti','feriti','morti','risk_score']]
+    .sort_values(['anno','comune'])
     .head(50),
     use_container_width=True
 )
 
-# =============================================================================
-# DOWNLOAD
-# =============================================================================
+# Download
 csv = df_f.to_csv(index=False).encode('utf-8')
-st.download_button("📥 Scarica Dati Filtrati (CSV)", csv, "saferoad_export.csv", "text/csv")
+st.download_button("📥 Scarica Dati (CSV)", csv, "saferoad_export.csv", "text/csv")
 
 # =============================================================================
 # FOOTER
