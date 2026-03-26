@@ -1,422 +1,336 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import requests
-from datetime import datetime
 from io import StringIO
+from datetime import datetime
 
-st.set_page_config(layout="wide", page_title="SafeRoad 🚗", page_icon="🚗")
+st.set_page_config(
+    page_title="SafeRoad",
+    page_icon="🚗",
+    layout="wide"
+)
 
-# =============================================================================
-# CONSTANTS
-# =============================================================================
-MONTHS = {
-    "All Months": 0,
-    "January": 1, "February": 2, "March": 3,
-    "April": 4, "May": 5, "June": 6,
-    "July": 7, "August": 8, "September": 9,
-    "October": 10, "November": 11, "December": 12
+# =========================================================
+# CONFIG
+# =========================================================
+
+# INCOLLA QUI L'URL CSV ESATTO GENERATO DA ESPLORADATI ISTAT
+# ESEMPIO FORMATO:
+# https://esploradati.istat.it/SDMXWS/rest/data/41_270_DF_DCIS_MORTIFERITISTR1_1/CHIAVE_ESATTA?startPeriod=2024-01&endPeriod=2024-12
+ISTAT_CSV_URL = "https://esploradati.istat.it/SDMXWS/rest/data/IT1,41_270_DF_DCIS_MORTIFERITISTR1_1,1.0/A..KILLINJ........99/ALL/?detail=full&startPeriod=2024-01-01&endPeriod=2024-12-31&dimensionAtObservation=TIME_PERIOD&format=csv"
+
+HEADERS = {
+    "Accept": "application/vnd.sdmx.data+csv;version=1.0.0"
 }
 
-MONTH_RISK = {
-    1: 0.85, 2: 0.88, 3: 1.00, 4: 1.05, 5: 1.10,
-    6: 1.25, 7: 1.30, 8: 1.28, 9: 1.10, 10: 1.00,
-    11: 0.90, 12: 0.87
+# Se i nomi colonna reali sono diversi, aggiornali qui dopo aver visto il debug
+COLUMN_MAPPING = {
+    "TIME_PERIOD": "time_period",
+    "OBS_VALUE": "value",
+    "REF_AREA": "ref_area",
+    "FREQ": "freq",
+    "AGE": "age_group",
+    "ETA": "age_group",
+    "SEX": "sex",
+    "SESSO": "sex",
+    "ROLE": "role",
+    "RUOLO": "role",
+    "USER_TYPE": "role",
+    "TIPO_UTENTE": "role",
+    "MEASURE": "measure",
+    "MISURA": "measure",
+    "UNIT_MEASURE": "unit_measure",
+    "PROVINCE": "province",
+    "TERRITORY": "province",
+    "REF_AREA_LABEL": "province"
 }
 
-AGE_GROUPS = ["All Ages", "18–24", "25–29", "30–59", "Over 60"]
+MONTH_ORDER = [
+    "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06",
+    "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12"
+]
 
-AGE_RISK = {
-    "All Ages": 1.0,
-    "18–24":    1.6,
-    "25–29":    1.3,
-    "30–59":    1.0,
-    "Over 60":  1.2
+MONTH_LABELS = {
+    "All Months": "All Months",
+    "2024-01": "January",
+    "2024-02": "February",
+    "2024-03": "March",
+    "2024-04": "April",
+    "2024-05": "May",
+    "2024-06": "June",
+    "2024-07": "July",
+    "2024-08": "August",
+    "2024-09": "September",
+    "2024-10": "October",
+    "2024-11": "November",
+    "2024-12": "December",
 }
 
-ITALIAN_PROVINCES = sorted([
-    "Agrigento","Alessandria","Ancona","Aosta","Arezzo","Ascoli Piceno","Asti",
-    "Avellino","Bari","Barletta-Andria-Trani","Belluno","Benevento","Bergamo",
-    "Biella","Bologna","Bolzano","Brescia","Brindisi","Cagliari","Caltanissetta",
-    "Campobasso","Caserta","Catania","Catanzaro","Chieti","Como","Cosenza",
-    "Cremona","Crotone","Cuneo","Enna","Fermo","Ferrara","Firenze","Foggia",
-    "Forlì-Cesena","Frosinone","Genova","Gorizia","Grosseto","Imperia","Isernia",
-    "La Spezia","L'Aquila","Latina","Lecce","Lecco","Livorno","Lodi","Lucca",
-    "Macerata","Mantova","Massa-Carrara","Matera","Messina","Milano","Modena",
-    "Monza e Brianza","Napoli","Novara","Nuoro","Oristano","Padova","Palermo",
-    "Parma","Pavia","Perugia","Pesaro e Urbino","Pescara","Piacenza","Pisa",
-    "Pistoia","Pordenone","Potenza","Prato","Ragusa","Ravenna","Reggio Calabria",
-    "Reggio Emilia","Rieti","Rimini","Roma","Rovigo","Salerno","Sassari","Savona",
-    "Siena","Siracusa","Sondrio","Sud Sardegna","Taranto","Teramo","Terni",
-    "Torino","Trapani","Trento","Treviso","Trieste","Udine","Varese","Venezia",
-    "Verbano-Cusio-Ossola","Vercelli","Verona","Vibo Valentia","Vicenza","Viterbo"
-])
-
-# =============================================================================
-# API — REAL DATA
-# =============================================================================
+# =========================================================
+# DATA LOADING
+# =========================================================
 @st.cache_data(ttl=3600)
-def fetch_mortality_data():
-    try:
-        url = "https://statweb.provincia.tn.it/indicatoristrutturali/exp.aspx?fmt=csv&idind=824&t=i"
-        r = requests.get(url, timeout=15)
-        if r.status_code == 200:
-            df = pd.read_csv(StringIO(r.text), sep=';')
-            df['Anno'] = df['Anno'].astype(int)
-            return df, True
-    except:
-        pass
-    return None, False
+def fetch_istat_csv():
+    if ISTAT_CSV_URL == "PASTE_ISTAT_CSV_URL_HERE":
+        raise ValueError("Please paste the exact ISTAT CSV URL generated by EsploraDati.")
 
-@st.cache_data(ttl=3600)
-def fetch_youth_mortality():
-    try:
-        url = "https://statweb.provincia.tn.it/indicatoristrutturali/exp.aspx?fmt=csv&idind=829&t=i"
-        r = requests.get(url, timeout=15)
-        if r.status_code == 200:
-            df = pd.read_csv(StringIO(r.text), sep=';')
-            df['Anno'] = df['Anno'].astype(int)
-            return df, True
-    except:
-        pass
-    return None, False
+    r = requests.get(ISTAT_CSV_URL, headers=HEADERS, timeout=30)
+    r.raise_for_status()
 
-# =============================================================================
-# DEMO DATA — YEAR 2024 FIXED
-# =============================================================================
-@st.cache_data
-def generate_data():
-    np.random.seed(42)
-    rows = []
-    ages_real = ["18–24", "25–29", "30–59", "Over 60"]
+    text = r.text.strip()
+    if not text:
+        raise ValueError("Empty response from ISTAT API.")
 
-    for province in ITALIAN_PROVINCES:
-        base = np.random.uniform(20, 180)
-        for month_name, month_num in list(MONTHS.items())[1:]:  # skip "All Months"
-            m_mult = MONTH_RISK[month_num]
-            for age in ages_real:
-                a_mult = AGE_RISK[age]
-                inj_ped  = max(0, int(np.random.poisson(base * 0.20 * m_mult * a_mult)))
-                inj_drv  = max(0, int(np.random.poisson(base * 0.50 * m_mult * a_mult)))
-                inj_pass = max(0, int(np.random.poisson(base * 0.30 * m_mult * a_mult)))
-                dead_ped  = max(0, int(np.random.poisson(base * 0.010 * m_mult * a_mult)))
-                dead_drv  = max(0, int(np.random.poisson(base * 0.020 * m_mult * a_mult)))
-                dead_pass = max(0, int(np.random.poisson(base * 0.008 * m_mult * a_mult)))
-                rows.append({
-                    "province":            province,
-                    "year":                2024,
-                    "month":               month_name,
-                    "month_num":           month_num,
-                    "age_group":           age,
-                    "injured_pedestrians": inj_ped,
-                    "injured_drivers":     inj_drv,
-                    "injured_passengers":  inj_pass,
-                    "dead_pedestrians":    dead_ped,
-                    "dead_drivers":        dead_drv,
-                    "dead_passengers":     dead_pass,
-                })
-
-    df = pd.DataFrame(rows)
-    df["total_injured"] = (
-        df["injured_pedestrians"] +
-        df["injured_drivers"] +
-        df["injured_passengers"]
-    )
-    df["total_dead"] = (
-        df["dead_pedestrians"] +
-        df["dead_drivers"] +
-        df["dead_passengers"]
-    )
-    df["risk_score"] = np.minimum(100,
-        df["total_injured"] * 0.35 + df["total_dead"] * 1.8
-    ).round(1)
-
-    def risk_label(s):
-        if s < 30:   return "🟢 Low"
-        elif s < 60: return "🟡 Medium"
-        else:        return "🔴 High"
-
-    df["risk_level"] = df["risk_score"].apply(risk_label)
+    df = pd.read_csv(StringIO(text))
     return df
 
-# =============================================================================
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    cols = {}
+    for c in df.columns:
+        c_clean = c.strip().upper()
+        cols[c] = COLUMN_MAPPING.get(c_clean, c.strip().lower())
+    df = df.rename(columns=cols)
+    return df
+
+def ensure_time_period_str(df: pd.DataFrame) -> pd.DataFrame:
+    if "time_period" in df.columns:
+        df["time_period"] = df["time_period"].astype(str)
+    return df
+
+def ensure_numeric_value(df: pd.DataFrame) -> pd.DataFrame:
+    if "value" in df.columns:
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    return df
+
+def filter_2024(df: pd.DataFrame) -> pd.DataFrame:
+    if "time_period" in df.columns:
+        df = df[df["time_period"].astype(str).str.startswith("2024")]
+    return df
+
+def get_dimension_values(df, col):
+    if col not in df.columns:
+        return []
+    return sorted(df[col].dropna().astype(str).unique().tolist())
+
+def pick_geo_column(df):
+    for candidate in ["province", "ref_area"]:
+        if candidate in df.columns:
+            return candidate
+    return None
+
+def pivot_measure_table(df, index_cols):
+    if "measure" in df.columns and "value" in df.columns:
+        out = df.pivot_table(
+            index=index_cols,
+            columns="measure",
+            values="value",
+            aggfunc="sum",
+            fill_value=0
+        ).reset_index()
+        out.columns = [str(c) for c in out.columns]
+        return out
+    return None
+
+# =========================================================
 # LOAD DATA
-# =============================================================================
-df_all                = generate_data()
-df_mort,  ok_mort     = fetch_mortality_data()
-df_youth, ok_youth    = fetch_youth_mortality()
-
-# =============================================================================
-# HEADER
-# =============================================================================
+# =========================================================
 st.title("🚗 SafeRoad")
-col_h1, col_h2 = st.columns([3, 1])
-with col_h1:
-    st.markdown("**Insurance Risk Assessment Dashboard** | All Italian Provinces | 📅 Year: 2024")
-    st.caption("Group 7 — Gianluca Pisetta, Erika Minelli, Antonio Susca")
-with col_h2:
-    st.caption(f"🕒 Last update: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    if ok_mort:
-        st.success("✅ Live data: Provincia di Trento")
-    else:
-        st.warning("⚠️ Demo data active")
+st.caption("Insurance Risk Assessment Dashboard | Live ISTAT SDMX Data Only")
 
-st.markdown("---")
+try:
+    raw_df = fetch_istat_csv()
+    df = normalize_columns(raw_df)
+    df = ensure_time_period_str(df)
+    df = ensure_numeric_value(df)
+    df = filter_2024(df)
+except Exception as e:
+    st.error("Unable to load ISTAT live data.")
+    st.code(str(e))
+    st.stop()
 
-# =============================================================================
-# SIDEBAR — FILTERS
-# =============================================================================
-st.sidebar.header("🔍 Filters")
-st.sidebar.markdown("---")
+if df.empty:
+    st.error("The ISTAT API returned no rows for 2024.")
+    st.stop()
 
-selected_provinces = st.sidebar.multiselect(
-    "📍 Province(s)",
-    options=ITALIAN_PROVINCES,
-    default=["Roma", "Milano", "Torino", "Napoli", "Trento"]
-)
-if not selected_provinces:
-    selected_provinces = ["Roma"]
+geo_col = pick_geo_column(df)
 
+st.success("Live ISTAT data loaded")
+st.caption(f"Last update: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+st.sidebar.header("Filters")
+
+if geo_col:
+    geo_values = get_dimension_values(df, geo_col)
+    default_geo = geo_values[:5] if len(geo_values) >= 5 else geo_values
+    selected_geo = st.sidebar.multiselect(
+        "Province / Area",
+        options=geo_values,
+        default=default_geo
+    )
+else:
+    selected_geo = []
+
+month_values = [m for m in MONTH_ORDER if m in get_dimension_values(df, "time_period")]
 selected_month = st.sidebar.selectbox(
-    "📅 Month",
-    options=list(MONTHS.keys()),
-    index=0
+    "Month",
+    options=["All Months"] + month_values,
+    format_func=lambda x: MONTH_LABELS.get(x, x)
 )
 
+age_values = get_dimension_values(df, "age_group")
 selected_age = st.sidebar.selectbox(
-    "👤 Age Group",
-    options=AGE_GROUPS,
-    index=0
+    "Age Group",
+    options=["All Ages"] + age_values if age_values else ["All Ages"]
+)
+
+role_values = get_dimension_values(df, "role")
+selected_role = st.sidebar.selectbox(
+    "Role",
+    options=["All Roles"] + role_values if role_values else ["All Roles"]
+)
+
+measure_values = get_dimension_values(df, "measure")
+selected_measures = st.sidebar.multiselect(
+    "Measures",
+    options=measure_values,
+    default=measure_values[:6] if len(measure_values) >= 6 else measure_values
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**📌 Data Sources**")
-st.sidebar.caption("• [ISTAT](https://www.istat.it)")
-st.sidebar.caption("• [Open Data Trentino](https://dati.trentino.it)")
-st.sidebar.caption("• [Statistica Trentino](https://statweb.provincia.tn.it)")
-st.sidebar.markdown("---")
-st.sidebar.caption("📅 Reference year: 2024")
-st.sidebar.caption("All road types included.")
-st.sidebar.caption("No road-type filtering applied.")
+st.sidebar.caption("Source: ISTAT SDMX REST")
+st.sidebar.caption("Year: 2024 only")
 
-# =============================================================================
-# FILTER LOGIC
-# =============================================================================
-df_f = df_all[df_all["province"].isin(selected_provinces)].copy()
+# =========================================================
+# FILTER DATA
+# =========================================================
+df_f = df.copy()
 
-if selected_month != "All Months":
-    df_f = df_f[df_f["month"] == selected_month]
+if geo_col and selected_geo:
+    df_f = df_f[df_f[geo_col].astype(str).isin(selected_geo)]
 
-if selected_age != "All Ages":
-    df_f = df_f[df_f["age_group"] == selected_age]
+if selected_month != "All Months" and "time_period" in df_f.columns:
+    df_f = df_f[df_f["time_period"].astype(str) == selected_month]
 
-period_label = selected_month if selected_month != "All Months" else "All Months"
-age_label    = selected_age   if selected_age   != "All Ages"   else "All Ages"
+if selected_age != "All Ages" and "age_group" in df_f.columns:
+    df_f = df_f[df_f["age_group"].astype(str) == selected_age]
 
-# =============================================================================
-# RF1 — 6 KPI CARDS
-# =============================================================================
-st.markdown(f"### 📊 Risk Indicators — {period_label} | {age_label} | 2024")
+if selected_role != "All Roles" and "role" in df_f.columns:
+    df_f = df_f[df_f["role"].astype(str) == selected_role]
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("🚶 Inj. Pedestrians", f"{df_f['injured_pedestrians'].sum():,}")
-c2.metric("🚗 Inj. Drivers",     f"{df_f['injured_drivers'].sum():,}")
-c3.metric("🧑 Inj. Passengers",  f"{df_f['injured_passengers'].sum():,}")
-c4.metric("💀 Dead Pedestrians", f"{df_f['dead_pedestrians'].sum():,}")
-c5.metric("💀 Dead Drivers",     f"{df_f['dead_drivers'].sum():,}")
-c6.metric("💀 Dead Passengers",  f"{df_f['dead_passengers'].sum():,}")
+if selected_measures and "measure" in df_f.columns:
+    df_f = df_f[df_f["measure"].astype(str).isin(selected_measures)]
 
-st.markdown("---")
+if df_f.empty:
+    st.warning("No rows match the selected filters.")
+    st.stop()
 
-# =============================================================================
-# RF2 — RISK SCORE + CONTRIBUTING FACTORS
-# =============================================================================
-st.markdown("### 🎯 Risk Score Estimation")
+# =========================================================
+# KPI AREA
+# =========================================================
+st.markdown("## Summary")
 
-col_rs1, col_rs2 = st.columns([1, 2])
+total_value = df_f["value"].sum() if "value" in df_f.columns else 0
+obs_count = len(df_f)
+distinct_geo = df_f[geo_col].nunique() if geo_col else 0
+distinct_measures = df_f["measure"].nunique() if "measure" in df_f.columns else 0
 
-with col_rs1:
-    avg_risk = df_f["risk_score"].mean()
-    if avg_risk < 30:
-        badge, color = "🟢 LOW RISK", "green"
-    elif avg_risk < 60:
-        badge, color = "🟡 MEDIUM RISK", "orange"
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Total value", f"{total_value:,.0f}")
+k2.metric("Observations", f"{obs_count:,}")
+k3.metric("Areas", f"{distinct_geo:,}")
+k4.metric("Measures", f"{distinct_measures:,}")
+
+# =========================================================
+# MEASURE SUMMARY
+# =========================================================
+if "measure" in df_f.columns and "value" in df_f.columns:
+    st.markdown("## Measure totals")
+    measure_summary = (
+        df_f.groupby("measure", dropna=False)["value"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    st.bar_chart(measure_summary)
+
+# =========================================================
+# MONTHLY TREND
+# =========================================================
+if "time_period" in df_f.columns and "value" in df_f.columns:
+    st.markdown("## Monthly trend")
+    if "measure" in df_f.columns:
+        trend_measure = st.selectbox(
+            "Trend measure",
+            options=get_dimension_values(df_f, "measure")
+        )
+        trend_df = df_f[df_f["measure"].astype(str) == trend_measure].copy()
     else:
-        badge, color = "🔴 HIGH RISK", "red"
+        trend_df = df_f.copy()
 
-    st.markdown(f"""
-    <div style='
-        background:#1e1e1e;
-        border:2px solid {color};
-        border-radius:12px;
-        padding:28px;
-        text-align:center;
-    '>
-        <div style='font-size:52px;font-weight:bold;color:{color}'>{avg_risk:.0f}</div>
-        <div style='color:#aaa;margin-bottom:6px'>out of 100</div>
-        <div style='font-size:18px;font-weight:bold;color:{color}'>{badge}</div>
-        <div style='color:#888;font-size:11px;margin-top:8px'>
-            Based on historical patterns,<br>
-            monthly trend & age group risk
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    trend = (
+        trend_df.groupby("time_period")["value"]
+        .sum()
+        .reindex(month_values)
+    )
+    st.line_chart(trend)
 
-with col_rs2:
-    st.markdown("**Main contributing factors:**")
-    month_w = MONTH_RISK.get(MONTHS.get(selected_month, 0), 1.0)
-    age_w   = AGE_RISK.get(selected_age, 1.0)
-    raw_factors = {
-        "📍 Historical accident density":       35,
-        f"📅 Monthly trend ({period_label})":   int(month_w * 20),
-        f"👤 Age group risk ({age_label})":     int(age_w * 15),
-        "🛣️ All road types (aggregated)":       10,
-    }
-    total = sum(raw_factors.values())
-    for label, w in raw_factors.items():
-        pct = round(w / total * 100)
-        st.markdown(f"**{label}** — {pct}%")
-        st.progress(pct / 100)
+# =========================================================
+# AGE COMPARISON
+# =========================================================
+if "age_group" in df_f.columns and "value" in df_f.columns:
+    st.markdown("## Age group comparison")
+    age_compare = df_f.groupby("age_group")["value"].sum().sort_values(ascending=False)
+    st.bar_chart(age_compare)
 
-st.markdown("---")
+# =========================================================
+# ROLE COMPARISON
+# =========================================================
+if "role" in df_f.columns and "value" in df_f.columns:
+    st.markdown("## Role comparison")
+    role_compare = df_f.groupby("role")["value"].sum().sort_values(ascending=False)
+    st.bar_chart(role_compare)
 
-# =============================================================================
-# RF1 — PROVINCE COMPARISON
-# =============================================================================
-st.markdown("### 🏙️ Province Comparison")
+# =========================================================
+# AREA COMPARISON
+# =========================================================
+if geo_col and "value" in df_f.columns:
+    st.markdown("## Area comparison")
+    area_compare = df_f.groupby(geo_col)["value"].sum().sort_values(ascending=False)
+    st.bar_chart(area_compare)
 
-compare_df = df_f.groupby("province").agg({
-    "injured_pedestrians": "sum",
-    "injured_drivers":     "sum",
-    "injured_passengers":  "sum",
-    "dead_pedestrians":    "sum",
-    "dead_drivers":        "sum",
-    "dead_passengers":     "sum",
-    "total_injured":       "sum",
-    "total_dead":          "sum",
-    "risk_score":          "mean",
-    "risk_level":          "first"
-}).reset_index().sort_values("risk_score", ascending=False)
+# =========================================================
+# PIVOT TABLE
+# =========================================================
+st.markdown("## Pivot view")
 
-col_c1, col_c2 = st.columns(2)
-with col_c1:
-    st.markdown("**Risk Score by Province**")
-    st.bar_chart(compare_df.set_index("province")["risk_score"])
-with col_c2:
-    st.markdown("**Total Injured vs Dead by Province**")
-    st.bar_chart(compare_df.set_index("province")[["total_injured", "total_dead"]])
+index_cols = []
+for c in [geo_col, "time_period", "age_group", "role"]:
+    if c and c in df_f.columns:
+        index_cols.append(c)
 
-st.markdown("**📋 Full Comparison Table**")
-st.dataframe(
-    compare_df[[
-        "province",
-        "injured_pedestrians", "injured_drivers",  "injured_passengers",
-        "dead_pedestrians",    "dead_drivers",      "dead_passengers",
-        "risk_score",          "risk_level"
-    ]].rename(columns={
-        "province":             "Province",
-        "injured_pedestrians":  "Inj. Pedestrians",
-        "injured_drivers":      "Inj. Drivers",
-        "injured_passengers":   "Inj. Passengers",
-        "dead_pedestrians":     "Dead Pedestrians",
-        "dead_drivers":         "Dead Drivers",
-        "dead_passengers":      "Dead Passengers",
-        "risk_score":           "Risk Score",
-        "risk_level":           "Risk Level"
-    }),
-    use_container_width=True
-)
+pivot_df = pivot_measure_table(df_f, index_cols=index_cols)
 
-st.markdown("---")
+if pivot_df is not None:
+    st.dataframe(pivot_df, use_container_width=True)
+else:
+    st.dataframe(df_f, use_container_width=True)
 
-# =============================================================================
-# MONTHLY TREND — only when "All Months" selected
-# =============================================================================
-if selected_month == "All Months":
-    st.markdown("### 📅 Monthly Trend — 2024")
-    monthly = df_f.groupby("month_num").agg({
-        "total_injured": "sum",
-        "total_dead":    "sum",
-        "risk_score":    "mean"
-    }).reindex(range(1, 13))
-    monthly.index = list(MONTHS.keys())[1:]
-    monthly.index.name = "Month"
+# =========================================================
+# DEBUG SECTION
+# =========================================================
+with st.expander("Debug: raw ISTAT columns"):
+    st.write(df.columns.tolist())
+    st.dataframe(df.head(20), use_container_width=True)
 
-    col_m1, col_m2 = st.columns(2)
-    with col_m1:
-        st.markdown("**Total Injured per Month**")
-        st.bar_chart(monthly["total_injured"])
-    with col_m2:
-        st.markdown("**Average Risk Score per Month**")
-        st.line_chart(monthly["risk_score"])
-
-    st.markdown("---")
-
-# =============================================================================
-# AGE GROUP COMPARISON — only when "All Ages" selected
-# =============================================================================
-if selected_age == "All Ages":
-    st.markdown("### 👥 Risk by Age Group — 2024")
-    age_q = df_all[df_all["province"].isin(selected_provinces)].copy()
-    if selected_month != "All Months":
-        age_q = age_q[age_q["month"] == selected_month]
-
-    age_compare = age_q.groupby("age_group").agg({
-        "risk_score":    "mean",
-        "total_injured": "sum",
-        "total_dead":    "sum"
-    }).reindex(["18–24", "25–29", "30–59", "Over 60"])
-
-    col_a1, col_a2 = st.columns(2)
-    with col_a1:
-        st.markdown("**Average Risk Score by Age Group**")
-        st.bar_chart(age_compare["risk_score"])
-    with col_a2:
-        st.markdown("**Total Injured by Age Group**")
-        st.bar_chart(age_compare["total_injured"])
-
-    st.markdown("---")
-
-# =============================================================================
-# REAL DATA — ISTAT VIA TRENTINO API
-# =============================================================================
-if ok_mort and df_mort is not None:
-    st.markdown("### 📈 Real Data — Road Mortality (ISTAT via Open Data Trentino)")
-    col_rd1, col_rd2 = st.columns(2)
-    with col_rd1:
-        st.markdown("**Mortality rate: Trentino vs Italy (per 100k inhabitants)**")
-        st.line_chart(df_mort[["Anno", "Trentino", "Italia"]].set_index("Anno"))
-    with col_rd2:
-        st.markdown("**Regional comparison — latest year**")
-        last  = df_mort.iloc[-1]
-        regioni = {
-            k: float(str(v).replace(',', '.'))
-            for k, v in last.items() if k != 'Anno'
-        }
-        st.bar_chart(pd.Series(regioni))
-
-    if ok_youth and df_youth is not None:
-        st.markdown("**👶 Youth mortality (15–34) — Trentino**")
-        st.line_chart(df_youth[["Anno", "Trentino"]].set_index("Anno"))
-
-    st.markdown("---")
-
-# =============================================================================
+# =========================================================
 # DOWNLOAD
-# =============================================================================
+# =========================================================
 csv = df_f.to_csv(index=False).encode("utf-8")
 st.download_button(
-    "📥 Download Filtered Data (CSV)",
-    csv,
-    "saferoad_2024_export.csv",
-    "text/csv"
-)
-
-# =============================================================================
-# FOOTER
-# =============================================================================
-st.markdown("---")
-st.caption(
-    "**SafeRoad** | Group 7 — Gianluca Pisetta, Erika Minelli, Antonio Susca | "
-    "Powered by ISTAT & Open Data Trentino | All road types included | 📅 Data: 2024"
+    "Download filtered CSV",
+    data=csv,
+    file_name="saferoad_istat_2024.csv",
+    mime="text/csv"
 )
