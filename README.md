@@ -2,7 +2,7 @@
 
 A simple Streamlit app template for you to modify!
 
-![Open in Streamlit](https://saferoad.streamlit.app/)
+[Open the app in your browser](https://saferoad.streamlit.app/)
 
 ### How to run it on your own pc
 #### You need python to run it
