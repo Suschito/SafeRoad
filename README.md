@@ -1,6 +1,7 @@
 # SafeRoad
 
-A simple Streamlit app template for you to modify!
+A web dashboard which shows risk indicators and an automatic estimate of the probability of an accident for a certain period in the year 2024.
+
 
 [Open the app in your browser](https://saferoad.streamlit.app/)
 
