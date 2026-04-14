@@ -5,15 +5,14 @@ from io import StringIO
 from datetime import datetime
 import time
 
-st.set_page_config(page_title="SafeRoad – ISTAT API DEBUG", page_icon="🚗", layout="wide")
+st.set_page_config(page_title="SafeRoad – ISTAT API", page_icon="🚗", layout="wide")
 
 BASE_URL = "https://esploradati.istat.it/SDMXWS/rest"
-DATAFLOW_ID = "41_983"  # Incidenti, morti e feriti - comuni (esempio)
+DATAFLOW_ID = "41_983"  # Incidenti, morti e feriti - comuni
 
 HEADERS = {
     "Accept": "application/vnd.sdmx.data+csv;version=1.0.0"
 }
-
 
 @st.cache_data(ttl=3600)
 def fetch_istat_csv():
@@ -33,36 +32,35 @@ def fetch_istat_csv():
             time.sleep(3)
     raise last_error
 
-
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    mapping = {}
-    for c in df.columns:
-        cu = c.strip().upper()
-        if cu == "TIME_PERIOD":
-            mapping[c] = "time_period"
-        elif cu == "OBS_VALUE":
-            mapping[c] = "value"
-        else:
-            mapping[c] = c.strip()
-    df = df.rename(columns=mapping)
-
-    if "time_period" in df.columns:
-        df["time_period"] = df["time_period"].astype(str)
-        df = df[df["time_period"].str.startswith("2024")]
-
-    if "value" in df.columns:
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-
+def preprocess(df: pd.DataFrame) -> pd.DataFrame:
+    # normalizza nomi
+    df = df.rename(columns={
+        "REF_AREA": "ref_area",
+        "DATA_TYPE": "data_type",
+        "RESULT": "result",
+        "time_period": "time_period",
+        "value": "value"
+    })
+    # solo 2024
+    df["time_period"] = df["time_period"].astype(str)
+    df = df[df["time_period"].str.startswith("2024")]
+    # value numerico
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
     return df
 
+def get_unique(df, col):
+    return sorted(df[col].dropna().astype(str).unique().tolist()) if col in df.columns else []
 
-st.title("🚗 SafeRoad – ISTAT API DEBUG")
-st.caption("Step 1: just load data and inspect columns for 2024.")
+# =========================================================
+# LOAD
+# =========================================================
+st.title("🚗 SafeRoad – ISTAT SDMX (41_983)")
+st.caption("Road accidents, killed and injured by territory, 2024 – live from ISTAT SDMX Web Services. [web:72][web:81]")
 
 with st.spinner("Fetching data from ISTAT..."):
     try:
         raw_df = fetch_istat_csv()
-        df = normalize_columns(raw_df)
+        df = preprocess(raw_df)
     except Exception as e:
         st.error("Unable to load ISTAT data.")
         st.code(str(e))
@@ -72,25 +70,122 @@ if df.empty:
     st.error("No rows for 2024.")
     st.stop()
 
-st.success("ISTAT data loaded.")
-st.caption(f"Rows: {len(df):,}")
+st.success(f"ISTAT data loaded. Rows: {len(df):,}")
 
-# KPI super generici
-if "value" in df.columns:
-    st.metric("Sum of OBS_VALUE", f"{df['value'].sum():,.0f}")
-st.metric("Rows", f"{len(df):,}")
+# =========================================================
+# SIDEBAR FILTERS
+# =========================================================
+st.sidebar.header("Filters")
 
-st.markdown("## Columns returned by ISTAT")
-st.write(list(df.columns))
+# territorio (ref_area è un codice; per ora usiamo solo il codice)
+areas = get_unique(df, "ref_area")
+default_areas = areas[:10] if len(areas) > 10 else areas
+selected_areas = st.sidebar.multiselect(
+    "Territory code (REF_AREA)",
+    options=areas,
+    default=default_areas
+)
 
-st.markdown("## Sample of data")
-st.dataframe(df.head(50), use_container_width=True)
+# data_type: KILLINJ (killed + injured) oppure ROADACC (incidenti)
+types = get_unique(df, "data_type")
+selected_types = st.sidebar.multiselect(
+    "Data type",
+    options=types,
+    default=types
+)
 
-# Download raw filtered data (2024 only)
-csv = df.to_csv(index=False).encode("utf-8")
+# result: F, M, 9 ecc.
+results = get_unique(df, "result")
+selected_results = st.sidebar.multiselect(
+    "Result category",
+    options=results,
+    default=results
+)
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Columns available: REF_AREA (territory code), DATA_TYPE (KILLINJ / ROADACC), RESULT, time_period, value. [file:137]")
+
+# =========================================================
+# APPLY FILTERS
+# =========================================================
+df_f = df.copy()
+
+if selected_areas:
+    df_f = df_f[df_f["ref_area"].astype(str).isin(selected_areas)]
+
+if selected_types:
+    df_f = df_f[df_f["data_type"].astype(str).isin(selected_types)]
+
+if selected_results:
+    df_f = df_f[df_f["result"].astype(str).isin(selected_results)]
+
+if df_f.empty:
+    st.warning("No rows match the selected filters.")
+    st.stop()
+
+# =========================================================
+# KPI
+# =========================================================
+st.markdown("## Summary")
+
+total_value = df_f["value"].sum()
+rows_count = len(df_f)
+n_areas = df_f["ref_area"].nunique()
+n_types = df_f["data_type"].nunique()
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total value", f"{total_value:,.0f}")
+c2.metric("Rows", f"{rows_count:,}")
+c3.metric("Territories (REF_AREA)", f"{n_areas:,}")
+c4.metric("Data types", f"{n_types:,}")
+
+# =========================================================
+# TOTAL BY DATA_TYPE
+# =========================================================
+st.markdown("## Totals by DATA_TYPE")
+tot_by_type = (
+    df_f.groupby("data_type")["value"]
+    .sum()
+    .sort_values(ascending=False)
+)
+st.bar_chart(tot_by_type)
+
+# =========================================================
+# TOTAL BY RESULT (e.g. F, M)
+# =========================================================
+st.markdown("## Totals by RESULT")
+tot_by_res = (
+    df_f.groupby("result")["value"]
+    .sum()
+    .sort_values(ascending=False)
+)
+st.bar_chart(tot_by_res)
+
+# =========================================================
+# TERRITORY COMPARISON
+# =========================================================
+st.markdown("## Territory comparison (REF_AREA)")
+area_comp = (
+    df_f.groupby("ref_area")["value"]
+    .sum()
+    .sort_values(ascending=False)
+    .head(30)
+)
+st.bar_chart(area_comp)
+
+# =========================================================
+# TABLE
+# =========================================================
+st.markdown("## Filtered data (first 200 rows)")
+st.dataframe(df_f.head(200), use_container_width=True)
+
+# =========================================================
+# DOWNLOAD
+# =========================================================
+csv = df_f.to_csv(index=False).encode("utf-8")
 st.download_button(
-    "Download 2024 data (raw)",
+    "Download filtered CSV",
     data=csv,
-    file_name="istat_41_983_2024_raw.csv",
+    file_name="istat_41_983_2024_filtered.csv",
     mime="text/csv"
 )
