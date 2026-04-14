@@ -5,7 +5,7 @@ A web dashboard which shows risk indicators and an automatic estimate of the pro
 
 [Open the app in your browser](https://saferoad.streamlit.app/)
 
-### How to run it on your own pc
+### But if you want to run it on your own pc
 #### You need python to run it
 1. Install the requirements with this command
 
