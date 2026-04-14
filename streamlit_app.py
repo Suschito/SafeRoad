@@ -33,19 +33,26 @@ def fetch_istat_csv():
     raise last_error
 
 def preprocess(df: pd.DataFrame) -> pd.DataFrame:
-    # normalizza nomi
-    df = df.rename(columns={
-        "REF_AREA": "ref_area",
-        "DATA_TYPE": "data_type",
-        "RESULT": "result",
-        "time_period": "time_period",
-        "value": "value"
-    })
-    # solo 2024
-    df["time_period"] = df["time_period"].astype(str)
-    df = df[df["time_period"].str.startswith("2024")]
-    # value numerico
-    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    # Assicuriamoci che le colonne attese esistano
+    for col in ["REF_AREA", "DATA_TYPE", "RESULT", "TIME_PERIOD", "OBS_VALUE"]:
+        if col not in df.columns:
+            # Se mancano TIME_PERIOD / OBS_VALUE usiamo i nomi già visti nel debug
+            pass
+
+    # TIME_PERIOD → string, filtra 2024 se presente
+    if "TIME_PERIOD" in df.columns:
+        df["TIME_PERIOD"] = df["TIME_PERIOD"].astype(str)
+        df = df[df["TIME_PERIOD"].str.startswith("2024")]
+    elif "time_period" in df.columns:
+        df["time_period"] = df["time_period"].astype(str)
+        df = df[df["time_period"].str.startswith("2024")]
+
+    # OBS_VALUE / value → numerico
+    if "OBS_VALUE" in df.columns:
+        df["OBS_VALUE"] = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
+    elif "value" in df.columns:
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
     return df
 
 def get_unique(df, col):
@@ -55,7 +62,7 @@ def get_unique(df, col):
 # LOAD
 # =========================================================
 st.title("🚗 SafeRoad – ISTAT SDMX (41_983)")
-st.caption("Road accidents, killed and injured by territory, 2024 – live from ISTAT SDMX Web Services. [web:72][web:81]")
+st.caption("Road accidents, killed and injured by territory, 2024 – live from ISTAT SDMX Web Services.")
 
 with st.spinner("Fetching data from ISTAT..."):
     try:
@@ -72,13 +79,16 @@ if df.empty:
 
 st.success(f"ISTAT data loaded. Rows: {len(df):,}")
 
+# decidiamo quali nomi usare
+value_col = "OBS_VALUE" if "OBS_VALUE" in df.columns else "value"
+time_col  = "TIME_PERIOD" if "TIME_PERIOD" in df.columns else "time_period"
+
 # =========================================================
 # SIDEBAR FILTERS
 # =========================================================
 st.sidebar.header("Filters")
 
-# territorio (ref_area è un codice; per ora usiamo solo il codice)
-areas = get_unique(df, "ref_area")
+areas = get_unique(df, "REF_AREA")
 default_areas = areas[:10] if len(areas) > 10 else areas
 selected_areas = st.sidebar.multiselect(
     "Territory code (REF_AREA)",
@@ -86,16 +96,14 @@ selected_areas = st.sidebar.multiselect(
     default=default_areas
 )
 
-# data_type: KILLINJ (killed + injured) oppure ROADACC (incidenti)
-types = get_unique(df, "data_type")
+types = get_unique(df, "DATA_TYPE")
 selected_types = st.sidebar.multiselect(
     "Data type",
     options=types,
     default=types
 )
 
-# result: F, M, 9 ecc.
-results = get_unique(df, "result")
+results = get_unique(df, "RESULT")
 selected_results = st.sidebar.multiselect(
     "Result category",
     options=results,
@@ -103,7 +111,7 @@ selected_results = st.sidebar.multiselect(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Columns available: REF_AREA (territory code), DATA_TYPE (KILLINJ / ROADACC), RESULT, time_period, value. [file:137]")
+st.sidebar.caption("Columns: REF_AREA, DATA_TYPE, RESULT, TIME_PERIOD, OBS_VALUE.")
 
 # =========================================================
 # APPLY FILTERS
@@ -111,13 +119,13 @@ st.sidebar.caption("Columns available: REF_AREA (territory code), DATA_TYPE (KIL
 df_f = df.copy()
 
 if selected_areas:
-    df_f = df_f[df_f["ref_area"].astype(str).isin(selected_areas)]
+    df_f = df_f[df_f["REF_AREA"].astype(str).isin(selected_areas)]
 
 if selected_types:
-    df_f = df_f[df_f["data_type"].astype(str).isin(selected_types)]
+    df_f = df_f[df_f["DATA_TYPE"].astype(str).isin(selected_types)]
 
 if selected_results:
-    df_f = df_f[df_f["result"].astype(str).isin(selected_results)]
+    df_f = df_f[df_f["RESULT"].astype(str).isin(selected_results)]
 
 if df_f.empty:
     st.warning("No rows match the selected filters.")
@@ -128,10 +136,10 @@ if df_f.empty:
 # =========================================================
 st.markdown("## Summary")
 
-total_value = df_f["value"].sum()
+total_value = df_f[value_col].sum()
 rows_count = len(df_f)
-n_areas = df_f["ref_area"].nunique()
-n_types = df_f["data_type"].nunique()
+n_areas = df_f["REF_AREA"].nunique()
+n_types = df_f["DATA_TYPE"].nunique()
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total value", f"{total_value:,.0f}")
@@ -144,18 +152,18 @@ c4.metric("Data types", f"{n_types:,}")
 # =========================================================
 st.markdown("## Totals by DATA_TYPE")
 tot_by_type = (
-    df_f.groupby("data_type")["value"]
+    df_f.groupby("DATA_TYPE")[value_col]
     .sum()
     .sort_values(ascending=False)
 )
 st.bar_chart(tot_by_type)
 
 # =========================================================
-# TOTAL BY RESULT (e.g. F, M)
+# TOTAL BY RESULT
 # =========================================================
 st.markdown("## Totals by RESULT")
 tot_by_res = (
-    df_f.groupby("result")["value"]
+    df_f.groupby("RESULT")[value_col]
     .sum()
     .sort_values(ascending=False)
 )
@@ -166,7 +174,7 @@ st.bar_chart(tot_by_res)
 # =========================================================
 st.markdown("## Territory comparison (REF_AREA)")
 area_comp = (
-    df_f.groupby("ref_area")["value"]
+    df_f.groupby("REF_AREA")[value_col]
     .sum()
     .sort_values(ascending=False)
     .head(30)
