@@ -73,8 +73,3 @@ else:
     st.bar_chart(by_age.set_index("age_group"))
 
 st.markdown("---")
-
-st.subheader("Detailed data")
-st.dataframe(filtered.sort_values(["province", "month", "age_group", "role"]))
-
-st.caption("Note: this dataset is synthetic and made for demo purposes only.")
