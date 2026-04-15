@@ -1,189 +1,147 @@
-import streamlit as st
 import pandas as pd
-import requests
-from io import StringIO
-from datetime import datetime
-import time
+import streamlit as st
 
-st.set_page_config(page_title="SafeRoad – ISTAT SDMX (Morti & feriti)", page_icon="🚗", layout="wide")
-
-# === INCOLLA QUI LA TUA QUERY DEL DATO (SENZA format) ===
-ISTAT_BASE_URL = "https://esploradati.istat.it/SDMXWS/rest/data/IT1,41_270_DF_DCIS_MORTIFERITISTR1_1,1.0/A..KILLINJ........99/ALL/?detail=full&startPeriod=2024-01-01&endPeriod=2024-12-31&dimensionAtObservation=TIME_PERIOD"
-
-HEADERS = {
-    "Accept": "application/vnd.sdmx.data+csv;version=1.0.0"  # CSV SDMX come da guida [web:72]
-}
-
-@st.cache_data(ttl=3600)
-def fetch_istat_csv():
-    # se aggiungiamo &format=csv doppio non dà fastidio, ma l'header già basta [web:87]
-    url = ISTAT_BASE_URL
-    last_error = None
-    for attempt in range(3):
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=90)
-            r.raise_for_status()
-            text = r.text.strip()
-            if not text:
-                raise ValueError("Empty response from ISTAT")
-            df = pd.read_csv(StringIO(text))
-            return df
-        except Exception as e:
-            last_error = e
-            time.sleep(3)
-    raise last_error
-
-def preprocess(df: pd.DataFrame) -> pd.DataFrame:
-    # Normalizza solo TIME_PERIOD e OBS_VALUE, lascia il resto com'è
-    if "TIME_PERIOD" in df.columns:
-        df["TIME_PERIOD"] = df["TIME_PERIOD"].astype(str)
-        df = df[df["TIME_PERIOD"].str.startswith("2024")]
-    if "OBS_VALUE" in df.columns:
-        df["OBS_VALUE"] = pd.to_numeric(df["OBS_VALUE"], errors="coerce")
+# --------------------------------------------------
+# 1. Load data
+# --------------------------------------------------
+@st.cache_data
+def load_data():
+    df = pd.read_csv("accidents_synthetic.csv")
     return df
 
-def get_unique(df, col):
-    return sorted(df[col].dropna().astype(str).unique().tolist()) if col in df.columns else []
+df = load_data()
 
-# =========================================================
-# LOAD DATA
-# =========================================================
-st.title("🚗 SafeRoad – ISTAT SDMX (Morti e feriti, 41_270)")
-st.caption("Dataflow: 41_270_DF_DCIS_MORTIFERITISTR1_1 – query KILLINJ, 2024, TIME_PERIOD. [web:72][web:81]")
-
-with st.spinner("Fetching data from ISTAT SDMX..."):
-    try:
-        raw_df = fetch_istat_csv()
-        df = preprocess(raw_df)
-    except Exception as e:
-        st.error("Unable to load ISTAT data from the new query.")
-        st.code(str(e))
-        st.info("If this keeps failing, we will switch to manual CSV export.")
-        st.stop()
-
-if df.empty:
-    st.error("No rows returned for 2024 with this query.")
-    st.stop()
-
-st.success(f"ISTAT data loaded. Rows: {len(df):,}")
-
-value_col = "OBS_VALUE"
-time_col = "TIME_PERIOD"
-
-# =========================================================
-# SIDEBAR (SOLO FILTRI SEMPLICI)
-# =========================================================
-st.sidebar.header("Filters")
-
-# Filtri su colonne principali se esistono
-dimensions = [c for c in df.columns if c not in ["DATAFLOW", "OBS_VALUE", "TIME_PERIOD", "OBS_STATUS",
-                                                 "NOTE_DS", "NOTE_REF_AREA", "NOTE_DATA_TYPE",
-                                                 "NOTE_RESULT", "NOTE_TIME_PERIOD", "BASE_PER",
-                                                 "UNIT_MEAS", "UNIT_MULT"]]
-
-# Proviamo almeno REF_AREA, AGE, SEX, ecc. se presenti
-main_dim = None
-for cand in ["REF_AREA", "ETA", "AGE", "SESSO", "SEX", "TIPO_UTENTE", "RUOLO_UTENTE"]:
-    if cand in df.columns:
-        main_dim = cand
-        break
-
-if main_dim:
-    vals = get_unique(df, main_dim)
-    default_vals = vals[:10] if len(vals) > 10 else vals
-    selected_vals = st.sidebar.multiselect(
-        f"{main_dim} filter",
-        options=vals,
-        default=default_vals
-    )
-else:
-    selected_vals = []
-
-# filtro mese (TIME_PERIOD)
-months = get_unique(df, time_col)
-selected_month = st.sidebar.selectbox(
-    "TIME_PERIOD",
-    options=["All"] + months
+st.set_page_config(
+    page_title="SafeRoad – Road Accident Dashboard",
+    layout="wide"
 )
 
-st.sidebar.markdown("---")
-st.sidebar.caption("Raw SDMX query from EsploraDati; no invented columns.")
+# --------------------------------------------------
+# 2. Sidebar filters
+# --------------------------------------------------
+st.sidebar.title("Filters")
 
-# =========================================================
-# APPLY FILTERS
-# =========================================================
-df_f = df.copy()
+years = sorted(df["year"].unique())
+provinces = sorted(df["province"].unique())
+age_groups = df["age_group"].unique()
+roles = df["role"].unique()
+months = list(range(1, 13))
 
-if main_dim and selected_vals:
-    df_f = df_f[df_f[main_dim].astype(str).isin(selected_vals)]
+year_sel = st.sidebar.multiselect(
+    "Year",
+    years,
+    default=years
+)
 
-if selected_month != "All":
-    df_f = df_f[df_f[time_col].astype(str) == selected_month]
+province_sel = st.sidebar.multiselect(
+    "Province",
+    provinces,
+    default=provinces
+)
 
-if df_f.empty:
-    st.warning("No rows match the selected filters.")
-    st.stop()
+month_sel = st.sidebar.multiselect(
+    "Month (1–12)",
+    months,
+    default=months
+)
 
-# =========================================================
-# KPI GENERICI
-# =========================================================
-st.markdown("## Summary")
+age_sel = st.sidebar.multiselect(
+    "Age group",
+    age_groups,
+    default=list(age_groups)
+)
 
-total_value = df_f[value_col].sum()
-rows_count = len(df_f)
+role_sel = st.sidebar.multiselect(
+    "Role",
+    roles,
+    default=list(roles)
+)
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Total OBS_VALUE", f"{total_value:,.0f}")
-c2.metric("Rows", f"{rows_count:,}")
-if main_dim:
-    c3.metric(f"Distinct {main_dim}", f"{df_f[main_dim].nunique():,}")
-else:
-    c3.metric("Distinct groups", "-")
+# Apply filters
+mask = (
+    df["year"].isin(year_sel)
+    & df["province"].isin(province_sel)
+    & df["month"].isin(month_sel)
+    & df["age_group"].isin(age_sel)
+    & df["role"].isin(role_sel)
+)
 
-# =========================================================
-# TREND PER TIME_PERIOD
-# =========================================================
-st.markdown("## Trend by TIME_PERIOD")
-trend = (
-    df_f.groupby(time_col)[value_col]
+filtered = df[mask].copy()
+
+# --------------------------------------------------
+# 3. Header
+# --------------------------------------------------
+st.title("SafeRoad – Road Accident Risk Dashboard")
+st.write(
+    "This dashboard shows synthetic but realistic road accident data for Italian provinces. "
+    "Use the filters on the left to explore risk by year, month, province, age group, and role."
+)
+
+# --------------------------------------------------
+# 4. KPI cards
+# --------------------------------------------------
+total_acc = int(filtered["accidents"].sum())
+total_inj = int(filtered["injuries"].sum())
+total_fat = int(filtered["fatalities"].sum())
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric("Total accidents", f"{total_acc:,}")
+col2.metric("Total injuries", f"{total_inj:,}")
+col3.metric("Total fatalities", f"{total_fat:,}")
+
+st.markdown("---")
+
+# --------------------------------------------------
+# 5. Charts – by month and by province
+# --------------------------------------------------
+# Aggregation by month
+by_month = (
+    filtered.groupby(["year", "month"], as_index=False)[["accidents", "injuries", "fatalities"]]
     .sum()
-    .sort_index()
+    .sort_values(["year", "month"])
 )
-st.line_chart(trend)
 
-# =========================================================
-# DISTRIBUZIONE PER DIMENSIONE PRINCIPALE
-# =========================================================
-if main_dim:
-    st.markdown(f"## Distribution by {main_dim}")
-    dist = (
-        df_f.groupby(main_dim)[value_col]
-        .sum()
-        .sort_values(ascending=False)
-        .head(30)
-    )
-    st.bar_chart(dist)
+# Aggregation by province
+by_prov = (
+    filtered.groupby("province", as_index=False)[["accidents", "injuries", "fatalities"]]
+    .sum()
+    .sort_values("accidents", ascending=False)
+)
 
-# =========================================================
-# TABELLA
-# =========================================================
-st.markdown("## Sample of data (first 200 rows)")
-st.dataframe(df_f.head(200), use_container_width=True)
+col_left, col_right = st.columns(2)
 
-# =========================================================
-# DEBUG
-# =========================================================
-with st.expander("Debug: columns + first rows"):
-    st.write("Columns:", list(df.columns))
-    st.dataframe(df.head(20), use_container_width=True)
+with col_left:
+    st.subheader("Accidents by month")
+    if by_month.empty:
+        st.info("No data for the selected filters.")
+    else:
+        # nice label year-month
+        by_month["year_month"] = by_month["year"].astype(str) + "-" + by_month["month"].astype(str).str.zfill(2)
+        st.line_chart(
+            by_month.set_index("year_month")[["accidents", "injuries", "fatalities"]]
+        )
 
-# =========================================================
-# DOWNLOAD
-# =========================================================
-csv = df_f.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "Download filtered CSV",
-    data=csv,
-    file_name="istat_41_270_MORTIFERITISTR1_2024_filtered.csv",
-    mime="text/csv"
+with col_right:
+    st.subheader("Accidents by province")
+    if by_prov.empty:
+        st.info("No data for the selected filters.")
+    else:
+        st.bar_chart(
+            by_prov.set_index("province")[["accidents", "injuries", "fatalities"]]
+        )
+
+st.markdown("---")
+
+# --------------------------------------------------
+# 6. Detailed table
+# --------------------------------------------------
+st.subheader("Detailed data")
+
+st.dataframe(
+    filtered.sort_values(["year", "province", "month", "age_group", "role"])
+)
+
+st.caption(
+    "Note: data are fully synthetic and only used for demonstration."
 )
