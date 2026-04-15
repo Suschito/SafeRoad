@@ -1,18 +1,42 @@
 import pandas as pd
+import numpy as np
 import streamlit as st
 
 st.set_page_config(page_title="SafeRoad - Road Accident Dashboard", layout="wide")
 
 @st.cache_data
 def load_data():
-    return pd.read_csv("accidents.csv")
+    return pd.read_csv("accidents_synthetic_2024_all_provinces.csv")
+
+def compute_risk_score(df):
+    agg = df.groupby("province", as_index=False).agg(
+        accidents=("accidents", "sum"),
+        injuries=("injuries", "sum"),
+        fatalities=("fatalities", "sum")
+    )
+    max_acc = max(agg["accidents"].max(), 1)
+    max_inj = max(agg["injuries"].max(), 1)
+    max_fat = max(agg["fatalities"].max(), 1)
+    agg["risk_score"] = (
+        0.5 * (agg["accidents"] / max_acc) * 100 +
+        0.3 * (agg["injuries"] / max_inj) * 100 +
+        0.2 * (agg["fatalities"] / max_fat) * 100
+    )
+    agg["risk_score"] = agg["risk_score"].round(1)
+    agg["risk_level"] = pd.cut(
+        agg["risk_score"],
+        bins=[-np.inf, 33, 66, np.inf],
+        labels=["Low", "Medium", "High"]
+    )
+    return agg.sort_values("risk_score", ascending=False)
 
 df = load_data()
+risk_by_province = compute_risk_score(df)
 
 st.title("SafeRoad - Road Accident Risk Dashboard")
 st.write(
-    "This dashboard showsv ISTAT road accident data for Italian provinces in 2024. "
-    "You can use the filters on the left to explore risk by month, province, age group, and role."
+    "This dashboard shows synthetic but realistic road accident data for Italian provinces in 2024. "
+    "Use the filters on the left to explore risk by month, province, age group, and role."
 )
 
 st.sidebar.title("Filters")
@@ -35,10 +59,14 @@ mask = (
 )
 filtered = df[mask].copy()
 
-col1, col2, col3 = st.columns(3)
+prov_mask = risk_by_province["province"].isin(province_sel)
+risk_filtered = risk_by_province[prov_mask].copy()
+
+col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total accidents", f"{int(filtered['accidents'].sum()):,}")
 col2.metric("Total injuries", f"{int(filtered['injuries'].sum()):,}")
 col3.metric("Total fatalities", f"{int(filtered['fatalities'].sum()):,}")
+col4.metric("Highest risk score", f"{risk_filtered['risk_score'].max():.1f}" if not risk_filtered.empty else "0.0")
 
 st.markdown("---")
 
@@ -59,6 +87,16 @@ with right:
         st.info("No data for the selected filters.")
     else:
         st.bar_chart(by_prov.set_index("province")[["accidents", "injuries", "fatalities"]])
+
+st.markdown("---")
+
+st.subheader("Risk score by province")
+if risk_filtered.empty:
+    st.info("No data for the selected filters.")
+else:
+    risk_view = risk_filtered[["province", "risk_score", "risk_level", "accidents", "injuries", "fatalities"]].copy()
+    st.dataframe(risk_view, use_container_width=True)
+    st.bar_chart(risk_view.set_index("province")["risk_score"])
 
 st.markdown("---")
 
