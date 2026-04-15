@@ -35,7 +35,7 @@ risk_by_province = compute_risk_score(df)
 
 st.title("SafeRoad - Road Accident Risk Dashboard")
 st.write(
-    "This dashboard shows synthetic but realistic road accident data for Italian provinces in 2024. "
+    "This dashboard shows ISTAT road accident data for Italian provinces in 2024. "
     "Use the filters on the left to explore risk by month, province, age group, and role."
 )
 
