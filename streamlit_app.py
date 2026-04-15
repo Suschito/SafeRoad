@@ -6,7 +6,7 @@ import streamlit as st
 # --------------------------------------------------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("accidents_synthetic.csv")
+    df = pd.read_csv("accidents.csv")
     return df
 
 df = load_data()
@@ -140,8 +140,4 @@ st.subheader("Detailed data")
 
 st.dataframe(
     filtered.sort_values(["year", "province", "month", "age_group", "role"])
-)
-
-st.caption(
-    "Note: data are fully synthetic and only used for demonstration."
 )
