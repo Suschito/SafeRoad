@@ -11,8 +11,8 @@ df = load_data()
 
 st.title("SafeRoad - Road Accident Risk Dashboard")
 st.write(
-    "This dashboard shows synthetic but realistic road accident data for Italian provinces in 2024. "
-    "Use the filters on the left to explore risk by month, province, age group, and role."
+    "This dashboard showsv ISTAT road accident data for Italian provinces in 2024. "
+    "You can use the filters on the left to explore risk by month, province, age group, and role."
 )
 
 st.sidebar.title("Filters")
